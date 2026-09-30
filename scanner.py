@@ -1,95 +1,117 @@
-import re, sqlite3, hashlib
+import sqlite3, hashlib, re
 from datetime import datetime, timezone
+from urllib.parse import quote_plus
 import feedparser
+import requests
 import trafilatura
 import pandas as pd
-import requests
-from urllib.parse import quote_plus
 
 DB = "news.db"
+UA = "Mozilla/5.0 (NewsWordScanner/2.0)"
 
-def init_db():
+def db():
     con = sqlite3.connect(DB)
-    con.executescript("""
-    CREATE TABLE IF NOT EXISTS articles(
-      id TEXT PRIMARY KEY, source TEXT, title TEXT, url TEXT UNIQUE,
-      published TEXT, text TEXT
-    );
-    """)
-    con.commit(); con.close()
+    con.execute("""CREATE TABLE IF NOT EXISTS articles(
+        id TEXT PRIMARY KEY, source TEXT NOT NULL, title TEXT, url TEXT UNIQUE,
+        published TEXT, text TEXT, fetched_at TEXT)""")
+    con.commit()
+    return con
 
-def clean_text(html_or_text):
-    if not html_or_text: return ""
-    extracted = trafilatura.extract(html_or_text, include_comments=False, include_tables=False)
-    return extracted or re.sub(r"<[^>]+>", " ", html_or_text)
+def clean_text(value):
+    if not value:
+        return ""
+    try:
+        x = trafilatura.extract(value, include_comments=False, include_tables=False)
+        if x:
+            return x
+    except Exception:
+        pass
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", value)).strip()
 
-def add_feed(source, url, limit=100):
+def article_text(url, fallback=""):
+    try:
+        r = requests.get(url, headers={"User-Agent": UA}, timeout=15)
+        r.raise_for_status()
+        txt = clean_text(r.text)
+        if len(txt.split()) >= max(80, len(fallback.split())):
+            return txt
+    except Exception:
+        pass
+    return clean_text(fallback)
+
+def add_feed(source, url, limit=100, fetch_pages=True):
     feed = feedparser.parse(url)
-    con = sqlite3.connect(DB)
-    n = 0
+    if getattr(feed, "bozo", False) and not feed.entries:
+        raise RuntimeError("Feed konnte nicht gelesen werden.")
+    con = db()
+    added = 0
     for e in feed.entries[:limit]:
-        link = e.get("link","").strip()
-        if not link: continue
-        raw = e.get("summary","") + "\n" + e.get("content",[{}])[0].get("value","")
-        text = clean_text(raw)
-        # Wenn der Feed nur einen Teaser enthält, versuchen wir den öffentlich
-        # erreichbaren Artikeltext von der verlinkten Seite zu extrahieren.
-        if len(text.split()) < 80:
-            try:
-                html = requests.get(link, timeout=15, headers={"User-Agent":"NewsWordScanner/0.1"}).text
-                full = clean_text(html)
-                if len(full.split()) > len(text.split()):
-                    text = full
-            except Exception:
-                pass
-        published = e.get("published", e.get("updated",""))
-        aid = hashlib.sha256(link.encode()).hexdigest()
+        link = str(e.get("link","")).strip()
+        if not link:
+            continue
+        title = str(e.get("title","")).strip()
+        fallback = str(e.get("summary",""))
+        if e.get("content"):
+            fallback += "\n" + str(e.get("content")[0].get("value",""))
+        txt = article_text(link, fallback) if fetch_pages else clean_text(fallback)
+        published = str(e.get("published", e.get("updated","")))
+        aid = hashlib.sha256(link.encode("utf-8")).hexdigest()
         try:
-            con.execute("INSERT INTO articles VALUES (?,?,?,?,?,?)",
-                        (aid, source, e.get("title",""), link, published, text))
-            n += 1
+            con.execute("INSERT INTO articles VALUES (?,?,?,?,?,?,?)",
+                (aid, source, title, link, published, txt,
+                 datetime.now(timezone.utc).isoformat()))
+            added += 1
         except sqlite3.IntegrityError:
             pass
     con.commit(); con.close()
-    return n
-
-def tokenize(text):
-    return re.findall(r"[A-Za-zÄÖÜäöüß]+", text.lower())
-
-def frequency(words, terms):
-    total = len(words)
-    if not total: return {t: 0 for t in terms}
-    return {t: words.count(t.lower()) / total for t in terms}
-
-def scan(terms, source=None):
-    con = sqlite3.connect(DB)
-    q = "SELECT source,title,url,published,text FROM articles"
-    params=[]
-    if source:
-        q += " WHERE source=?"; params.append(source)
-    df = pd.read_sql_query(q, con, params=params)
-    con.close()
-    if df.empty: return pd.DataFrame()
-    rows=[]
-    for _, r in df.iterrows():
-        words = tokenize(r.text or "")
-        vals = frequency(words, terms)
-        try: dt = pd.to_datetime(r.published, utc=True)
-        except: dt = pd.NaT
-        for term, rel in vals.items():
-            rows.append({"date": dt, "source": r.source, "title": r.title,
-                         "url": r.url, "term": term, "relative": rel,
-                         "count": int(rel*len(words)), "words": len(words)})
-    out = pd.DataFrame(rows)
-    out["day"] = out["date"].dt.date
-    return out
-
-if __name__ == "__main__":
-    init_db()
-    print("DB initialisiert.")
-
+    return added
 
 def add_google_news(query, limit=100):
-    """Google-News-Suche als zusätzliche Discovery-Quelle."""
     url = "https://news.google.com/rss/search?q=" + quote_plus(query) + "&hl=de&gl=DE&ceid=DE:de"
-    return add_feed("google_news:" + query, url, limit)
+    return add_feed("Google News: " + query, url, limit, fetch_pages=True)
+
+def tokenize(text):
+    return re.findall(r"[A-Za-zÄÖÜäöüß]+(?:[-'][A-Za-zÄÖÜäöüß]+)*", str(text).lower())
+
+def load_articles(source=None):
+    con = db()
+    q = "SELECT source,title,url,published,text FROM articles"
+    params = []
+    if source and source != "Alle":
+        q += " WHERE source=?"
+        params.append(source)
+    df = pd.read_sql_query(q, con, params=params)
+    con.close()
+    if df.empty:
+        return df
+    df["date"] = pd.to_datetime(df["published"], errors="coerce", utc=True)
+    df["date"] = df["date"].fillna(pd.Timestamp.now(tz="UTC"))
+    return df
+
+def analyze(terms, source=None, freq="W"):
+    arts = load_articles(source)
+    if arts.empty:
+        return pd.DataFrame()
+    terms = [t.lower().strip() for t in terms if t.strip()]
+    rows = []
+    for _, a in arts.iterrows():
+        words = tokenize(a["text"])
+        if not words:
+            continue
+        counts = {t: sum(1 for w in words if w == t) for t in terms}
+        bucket = a["date"].to_period(freq).start_time
+        for t, c in counts.items():
+            rows.append({
+                "period": bucket, "term": t, "occurrences": c,
+                "total_words": len(words), "articles": 1
+            })
+    if not rows:
+        return pd.DataFrame()
+    x = pd.DataFrame(rows)
+    g = x.groupby(["period","term"], as_index=False).agg(
+        occurrences=("occurrences","sum"),
+        total_words=("total_words","sum"),
+        articles=("articles","sum")
+    )
+    g["relative_percent"] = (g["occurrences"] / g["total_words"] * 100).fillna(0)
+    return g.sort_values(["period","term"])

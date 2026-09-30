@@ -1,6 +1,6 @@
-# Deutscher Nachrichten-Wortscanner
+# News Word Scanner V2
 
-MVP für relative Worthäufigkeiten in deutschen Online-Nachrichten.
+Robuster Streamlit-MVP zur Messung der relativen Worthäufigkeit in deutschen Online-Nachrichten.
 
 ## Start
 ```bash
@@ -8,17 +8,22 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-## Funktionsumfang
-- RSS-Feeds als Quellen
-- Google-News-Suche über RSS-Suchendpunkte (optional, abhängig von Verfügbarkeit)
+## V2
+- sofort sichtbares Dashboard, auch ohne Daten
+- Testmodus mit Demo-Daten
+- echte RSS-Feeds
+- Google-News-RSS-Suche
 - Artikeltext-Extraktion
-- Wort-/Lemma-Zählung
-- relative Häufigkeit je Zeitfenster
-- Vergleich mehrerer Begriffe
-- CSV-Export
+- tägliche / wöchentliche / monatliche Aggregation
+- korrekte Gesamtquote: Summe Wortvorkommen / Summe aller Wörter
+- interaktives Plotly-Diagramm
 - Quellenfilter
+- Rohdaten- und Aggregat-CSV-Export
+- sichtbare Fehlerdiagnose
+- SQLite-Datenbank
+- automatische Erkennung neuer Artikel per URL
 
-## Datenbasis
-Der Scanner speichert standardmäßig Metadaten und extrahierten Artikeltext lokal. Prüfe vor produktiver Nutzung die Nutzungsbedingungen der jeweiligen Quelle. Für tagesschau.de existieren offizielle RSS-Feeds; deren Nutzungsbedingungen beschränken insbesondere Archivierung und Weitergabe.
+## Hinweis zur Datenbasis
+Das Tool erfasst nur Quellen, die über zugängliche Feeds bzw. Seiten erreichbar sind. Es ist nicht garantiert, dass damit "alle deutschen Zeitungen" vollständig erfasst werden. Paywalls, robots.txt, Lizenzbedingungen und technische Änderungen können die Abdeckung einschränken.
 
-Google News hat seit 2025 seine Publisher-Infrastruktur geändert; der Scanner behandelt Google News deshalb als zusätzliche Such-/Discovery-Quelle und nicht als vollständigen Ersatz für direkte Verlagsfeeds.
+Bei tagesschau.de gibt es offizielle RSS-Feeds; deren Nutzungsbedingungen sind zu beachten.
