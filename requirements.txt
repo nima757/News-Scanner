@@ -1,0 +1,8 @@
+streamlit
+feedparser
+trafilatura
+pandas
+plotly
+spacy
+requests
+beautifulsoup4
